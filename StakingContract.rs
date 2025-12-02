@@ -8,6 +8,9 @@ declare_id!("4DGD5eBb5SXfSKoEggTjDTw6CSvYg97V6CoVjT34zK9W");
 pub mod staking_contract {
     use super::*;
 
+    // ------------------------------------
+    // INITIALIZE
+    // ------------------------------------
     pub fn init(ctx: Context<Init>) -> Result<()> {
         let pda = &mut ctx.accounts.pda_account;
 
@@ -16,26 +19,27 @@ pub mod staking_contract {
         pda.total_points = 0;
         pda.last_update = Clock::get()?.unix_timestamp;
         pda.reward_mint = ctx.accounts.reward_mint.key();
-        pda.bump = *ctx.bumps.get("pda_account").unwrap();
+        pda.bump = ctx.bumps.pda_account;
 
-        msg!("Staking account initialized.");
+        msg!("Staking account initialized!");
         Ok(())
     }
 
+    // ------------------------------------
+    // STAKE
+    // ------------------------------------
     pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
         require!(amount > 0, StakeError::InvalidAmount);
 
         let pda = &mut ctx.accounts.pda_account;
-        let clock = Clock::get()?;
-
-        update_points(pda, clock.unix_timestamp)?;
+        update_points(pda, Clock::get()?.unix_timestamp)?;
 
         // Transfer lamports user → PDA
         let cpi = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
                 from: ctx.accounts.user.to_account_info(),
-                to: ctx.accounts.pda_account.to_account_info(),
+                to: pda.to_account_info(),
             },
         );
         system_program::transfer(cpi, amount)?;
@@ -48,17 +52,20 @@ pub mod staking_contract {
         Ok(())
     }
 
+    // ------------------------------------
+    // UNSTAKE
+    // ------------------------------------
     pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
         require!(amount > 0, StakeError::InvalidAmount);
 
         let pda = &mut ctx.accounts.pda_account;
-        let clock = Clock::get()?;
+        update_points(pda, Clock::get()?.unix_timestamp)?;
 
-        require!(pda.stake_amount >= amount, StakeError::InsufficientStakeBalance);
+        require!(
+            pda.stake_amount >= amount,
+            StakeError::InsufficientStakeBalance
+        );
 
-        update_points(pda, clock.unix_timestamp)?;
-
-        // PDA signer seeds
         let seeds = &[
             b"client1",
             ctx.accounts.user.key.as_ref(),
@@ -70,7 +77,7 @@ pub mod staking_contract {
         let cpi = CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
-                from: ctx.accounts.pda_account.to_account_info(),
+                from: pda.to_account_info(),
                 to: ctx.accounts.user.to_account_info(),
             },
             signer,
@@ -85,19 +92,19 @@ pub mod staking_contract {
         Ok(())
     }
 
+    // ------------------------------------
+    // CLAIM POINTS (Mint Reward Tokens)
+    // ------------------------------------
     pub fn claim_points(ctx: Context<ClaimPoints>) -> Result<()> {
         let pda = &mut ctx.accounts.pda_account;
-        let clock = Clock::get()?;
+        update_points(pda, Clock::get()?.unix_timestamp)?;
 
-        update_points(pda, clock.unix_timestamp)?;
+        let claimable = pda.total_points / 1_000_000;
+        require!(claimable > 0, StakeError::NothingToClaim);
 
-        // Convert points → reward tokens
-        let claimable_points = pda.total_points / 1_000_000;
-        require!(claimable_points > 0, StakeError::NothingToClaim);
+        msg!("User can claim {} reward tokens", claimable);
 
-        msg!("User can claim {} reward tokens.", claimable_points);
-
-        // PDA (mint authority) signer
+        // PDA signer (mint authority)
         let seeds = &[
             b"client1",
             ctx.accounts.user.key.as_ref(),
@@ -105,37 +112,39 @@ pub mod staking_contract {
         ];
         let signer = &[&seeds[..]];
 
-        // Mint tokens to user
+        // Mint reward tokens to user
         let mint_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             MintTo {
                 mint: ctx.accounts.reward_mint.to_account_info(),
                 to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.pda_account.to_account_info(),
+                authority: pda.to_account_info(),
             },
             signer,
         );
 
-        token::mint_to(mint_ctx, claimable_points as u64)?;
+        token::mint_to(mint_ctx, claimable as u64)?;
 
+        // Reset points
         pda.total_points = 0;
 
         Ok(())
     }
 }
 
-
-/// --------------------------------------
-/// INTERNAL POINT CALCULATION FUNCTION
-/// --------------------------------------
-fn update_points(pda: &mut StakeAccount, current_time: i64) -> Result<()> {
-    let time_elapsed = current_time
+//
+// ───────────────────────────────────────────────
+//   INTERNAL POINT CALCULATION
+// ───────────────────────────────────────────────
+//
+fn update_points(pda: &mut StakeAccount, now: i64) -> Result<()> {
+    let elapsed = now
         .checked_sub(pda.last_update)
         .ok_or(StakeError::InvalidTimestamp)?;
 
-    if time_elapsed > 0 && pda.stake_amount > 0 {
+    if elapsed > 0 && pda.stake_amount > 0 {
         let new_points = (pda.stake_amount as u128)
-            .checked_mul(time_elapsed as u128)
+            .checked_mul(elapsed as u128)
             .ok_or(StakeError::Overflow)?;
 
         pda.total_points = pda
@@ -144,37 +153,34 @@ fn update_points(pda: &mut StakeAccount, current_time: i64) -> Result<()> {
             .ok_or(StakeError::Overflow)?;
     }
 
-    pda.last_update = current_time;
+    pda.last_update = now;
     Ok(())
 }
 
+//
+// ───────────────────────────────────────────────
+//   ACCOUNTS
+// ───────────────────────────────────────────────
+//
 
-/// --------------------------------------
-/// ACCOUNT STRUCTS
-/// --------------------------------------
 #[account]
 pub struct StakeAccount {
     pub owner: Pubkey,
     pub stake_amount: u64,
     pub total_points: u128,
     pub last_update: i64,
-    pub reward_mint: Pubkey,   // <── NEW: reward token mint
+    pub reward_mint: Pubkey,
     pub bump: u8,
 }
 
-
-/// --------------------------------------
-/// ACCOUNT CONTEXTS
-/// --------------------------------------
-
+// INITIALIZE
 #[derive(Accounts)]
 pub struct Init<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    // Reward mint (owner controls supply initially)
     #[account(mut)]
-    pub reward_mint: Account<'info, Mint>,
+    pub reward_mint: Account<'info, Mint>, // custom token chosen by owner
 
     #[account(
         init,
@@ -189,6 +195,7 @@ pub struct Init<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+// STAKE
 #[derive(Accounts)]
 pub struct Stake<'info> {
     #[account(mut)]
@@ -204,6 +211,7 @@ pub struct Stake<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// UNSTAKE
 #[derive(Accounts)]
 pub struct Unstake<'info> {
     #[account(mut)]
@@ -219,6 +227,7 @@ pub struct Unstake<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// CLAIM POINTS
 #[derive(Accounts)]
 pub struct ClaimPoints<'info> {
     #[account(mut)]
@@ -226,7 +235,7 @@ pub struct ClaimPoints<'info> {
 
     #[account(
         mut,
-        seeds = [b"client1", user.key().as_ref()],
+        seeds = [b"client1", user.key.as_ref()],
         bump = pda_account.bump
     )]
     pub pda_account: Account<'info, StakeAccount>,
@@ -244,19 +253,20 @@ pub struct ClaimPoints<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-
-/// --------------------------------------
-/// ERRORS
-/// --------------------------------------
+//
+// ───────────────────────────────────────────────
+//   ERRORS
+// ───────────────────────────────────────────────
+//
 #[error_code]
 pub enum StakeError {
-    #[msg("Invalid staking amount")]
+    #[msg("Invalid amount")]
     InvalidAmount,
     #[msg("Nothing to claim")]
     NothingToClaim,
-    #[msg("Insufficient staked balance")]
+    #[msg("Insufficient stake balance")]
     InsufficientStakeBalance,
-    #[msg("Overflow error")]
+    #[msg("Overflow")]
     Overflow,
     #[msg("Timestamp error")]
     InvalidTimestamp,
