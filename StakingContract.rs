@@ -66,11 +66,7 @@ pub mod staking_contract {
             StakeError::InsufficientStakeBalance
         );
 
-        let seeds = &[
-            b"client1",
-            ctx.accounts.user.key.as_ref(),
-            &[pda.bump],
-        ];
+        let seeds = &[b"client1", ctx.accounts.user.key.as_ref(), &[pda.bump]];
         let signer = &[&seeds[..]];
 
         // Transfer lamports PDA → user
@@ -104,12 +100,7 @@ pub mod staking_contract {
 
         msg!("User can claim {} reward tokens", claimable);
 
-        // PDA signer (mint authority)
-        let seeds = &[
-            b"client1",
-            ctx.accounts.user.key.as_ref(),
-            &[pda.bump],
-        ];
+        let seeds = &[b"client1", ctx.accounts.user.key.as_ref(), &[pda.bump]];
         let signer = &[&seeds[..]];
 
         // Mint reward tokens to user
@@ -122,7 +113,6 @@ pub mod staking_contract {
             },
             signer,
         );
-
         token::mint_to(mint_ctx, claimable as u64)?;
 
         // Reset points
@@ -253,11 +243,7 @@ pub struct ClaimPoints<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-//
-// ───────────────────────────────────────────────
-//   ERRORS
-// ───────────────────────────────────────────────
-//
+// ERRORS
 #[error_code]
 pub enum StakeError {
     #[msg("Invalid amount")]
