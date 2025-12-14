@@ -32,8 +32,6 @@ describe("escrow_contract", () => {
       .accounts({
         buyer: buyer.publicKey,
         seller: seller.publicKey,
-        escrowPda,  // Provide the derived PDA here
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
@@ -55,8 +53,6 @@ describe("escrow_contract", () => {
       .deposit(new anchor.BN(depositAmount))
       .accounts({
         buyer: buyer.publicKey,
-        escrowPda,  // Provide the derived PDA here
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
@@ -81,8 +77,6 @@ describe("escrow_contract", () => {
       .accounts({
         buyer: buyer.publicKey,
         seller: seller.publicKey,
-        escrowPda,  // Provide the derived PDA here
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
