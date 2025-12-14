@@ -48,62 +48,43 @@ pub mod escrow_contract {
         Ok(())
     }
 
-    // -------------------------------
-    // Release SOL to seller
-    // -------------------------------
-    pub fn release(ctx: Context<Release>) -> Result<()> {
-        let escrow = &mut ctx.accounts.escrow_pda;
+// -------------------------------
+// Release SOL to seller
+// -------------------------------
+pub fn release(ctx: Context<Release>) -> Result<()> {
+    let escrow = &mut ctx.accounts.escrow_pda;
+    require!(escrow.amount > 0, EscrowError::InvalidAmount);
+    require!(escrow.state == EscrowState::BuyerDeposit, EscrowError::InvalidState);
 
-        require!(escrow.amount > 0, EscrowError::InvalidAmount);
-       require!(escrow.state == EscrowState::BuyerDeposit, EscrowError::InvalidState);
+    let amount = escrow.amount;
 
-        let seeds = &[b"escrow", escrow.buyer.as_ref(), &[escrow.bump]];
-        let signer = &[&seeds[..]];
+    // Manual lamport transfer (works with data accounts)
+    **escrow.to_account_info().try_borrow_mut_lamports()? -= amount;
+    **ctx.accounts.seller.to_account_info().try_borrow_mut_lamports()? += amount;
 
-        let cpi = CpiContext::new_with_signer(
-            ctx.accounts.system_program.to_account_info(),
-            system_program::Transfer {
-                from: escrow.to_account_info(),
-                to: ctx.accounts.seller.to_account_info(),
-            },
-            signer,
-        );
+    escrow.amount = 0;
+    escrow.state = EscrowState::Completed;
+    Ok(())
+}
 
-        system_program::transfer(cpi, escrow.amount)?;
-        escrow.amount = 0;
-        escrow.state = EscrowState::Completed;
+// -------------------------------
+// Refund SOL to buyer
+// -------------------------------
+pub fn refund(ctx: Context<Refund>) -> Result<()> {
+    let escrow = &mut ctx.accounts.escrow_pda;
+    require!(escrow.amount > 0, EscrowError::InvalidAmount);
+    require!(escrow.state == EscrowState::BuyerDeposit, EscrowError::InvalidState);
 
-        Ok(())
-    }
+    let amount = escrow.amount;
 
-    // -------------------------------
-    // Refund SOL to buyer
-    // -------------------------------
-    pub fn refund(ctx: Context<Refund>) -> Result<()> {
-        let escrow = &mut ctx.accounts.escrow_pda;
+    // Manual lamport transfer (works with data accounts)
+    **escrow.to_account_info().try_borrow_mut_lamports()? -= amount;
+    **ctx.accounts.buyer.to_account_info().try_borrow_mut_lamports()? += amount;
 
-        require!(escrow.amount > 0, EscrowError::InvalidAmount);
-        require!(escrow.state == EscrowState::BuyerDeposit, EscrowError::InvalidState);
-
-
-        let seeds = &[b"escrow", escrow.buyer.as_ref(), &[escrow.bump]];
-        let signer = &[&seeds[..]];
-
-        let cpi = CpiContext::new_with_signer(
-            ctx.accounts.system_program.to_account_info(),
-            system_program::Transfer {
-                from: escrow.to_account_info(),
-                to: ctx.accounts.buyer.to_account_info(),
-            },
-            signer,
-        );
-
-        system_program::transfer(cpi, escrow.amount)?;
-        escrow.amount = 0;
-        escrow.state = EscrowState::Cancelled;
-
-        Ok(())
-    }
+    escrow.amount = 0;
+    escrow.state = EscrowState::Cancelled;
+    Ok(())
+}
 }
 
 // -------------------------------
